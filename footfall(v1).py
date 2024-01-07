@@ -1,9 +1,11 @@
 import torch
+import face_recognition
 import cv2
 from mtcnn import MTCNN
 from deep_sort_realtime.deepsort_tracker import DeepSort
-import face_recognition
 import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 
 # Initialize DeepSORT tracker
 tracker = DeepSort(max_age=10)
