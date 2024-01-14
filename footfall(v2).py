@@ -6,14 +6,18 @@ import face_recognition
 from mtcnn import MTCNN
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import os
-
+import ctypes
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# Get screen resolution
+user32 = ctypes.windll.user32
+screen_width, screen_height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
 # Initialize MediaPipe FaceMesh
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-mp_drawing = mp.solutions.drawing_utils
-drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
+# mp_drawing = mp.solutions.drawing_utils
+# drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 
 # Initialize DeepSORT tracker
 tracker = DeepSort(max_age=10)
@@ -28,7 +32,7 @@ cap = cv2.VideoCapture(0)  # Use 0 for the default camera
 min_face_size = 10000  # For example, minimum area of 5000 pixels
 
 # Set Angle value for head pose filtering
-angle = 15 # Reduce the value if you need to get more straight faces.
+angle = 13 # Reduce the value if you need to get more straight faces.
 
 # Dictionary to track whether the face image and embedding have been saved for each ID
 saved_data = {}
@@ -38,6 +42,10 @@ os.makedirs("footfall(V2)", exist_ok=True)
 
 # Initialize frame_id
 frame_id = 0
+
+# Set window size to match screen size
+cv2.namedWindow('Face Re-Identification', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Face Re-Identification', screen_width, screen_height)
 
 while True:
     ret, frame = cap.read()
@@ -189,10 +197,10 @@ while True:
     cv2.putText(frame, f"Unique Faces: {len(saved_data)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     # Display the frame
-    cv2.imshow("Real-Time Face Recognition", frame)
+    cv2.imshow("Face Re-Identification", frame)
 
-    # Break the loop if 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    # Break the loop if 'Esc' is pressed
+    if cv2.waitKey(1) & 0xFF == 27: # Press Esc to close terminate
         break
 
 # Release resources
