@@ -1,0 +1,201 @@
+import torch
+import cv2
+import mediapipe as mp
+import numpy as np
+import face_recognition
+from mtcnn import MTCNN
+from deep_sort_realtime.deepsort_tracker import DeepSort
+import os
+
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# Initialize MediaPipe FaceMesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+mp_drawing = mp.solutions.drawing_utils
+drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
+
+# Initialize DeepSORT tracker
+tracker = DeepSort(max_age=10)
+
+# Load pre-trained MTCNN model for face detection
+mtcnn = MTCNN()
+
+# Open video file (change "your_video.mp4" to the path of your video file)
+video_path = "1st.mp4"
+cap = cv2.VideoCapture(video_path)
+
+# Size threshold for faces (adjust as needed)
+min_face_size = 2000  # For example, minimum area of 5000 pixels
+
+# Set Angle value for head pose filtering
+angle = 15  # Reduce the value if you need to get more straight faces.
+
+# Dictionary to track whether the face image and embedding have been saved for each ID
+saved_data = {}
+
+# Create a directory to save face images
+os.makedirs("footfall(V2)_video", exist_ok=True)
+
+# Initialize frame_id
+frame_id = 0
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Increment frame_id
+    frame_id += 1
+
+    # Detect faces using MTCNN
+    faces = mtcnn.detect_faces(frame)
+
+    # Draw bounding boxes for all detected faces
+    for face in faces:
+        box = face['box']
+        confidence = face['confidence']
+
+        # Draw bounding box
+        cv2.rectangle(frame, (box[0], box[1]), (box[0] + box[2], box[1] + box[3]), (0, 255, 0), 2)
+
+    # Update tracker with the detected faces
+    bbs = [(face['box'], face['confidence'], face['keypoints']) for face in faces]
+    tracks = tracker.update_tracks(bbs, frame=frame)
+
+    # Draw bounding boxes and IDs on the frame
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+        track_id = track.track_id
+
+        # Check if the face with the current track_id has already been saved
+        if track_id in saved_data:
+            continue
+
+        # Get facial landmarks using MediaPipe FaceMesh
+        landmarks = face_mesh.process(frame)
+
+        img_h, img_w, img_c = frame.shape
+        face_3d = []
+        face_2d = []
+
+        if landmarks.multi_face_landmarks:
+            for face_landmarks in landmarks.multi_face_landmarks:
+                for idx, lm in enumerate(face_landmarks.landmark):
+                    if idx == 33 or idx == 263 or idx == 1 or idx == 61 or idx == 291 or idx == 199:
+                        if idx == 1:
+                            nose_2d = (lm.x * img_w, lm.y * img_h)
+                            nose_3d = (lm.x * img_w, lm.y * img_h, lm.z * 3000)
+
+                        x, y = int(lm.x * img_w), int(lm.y * img_h)
+
+                        # Get the 2D Coordinates
+                        face_2d.append([x, y])  # Append to face_2d
+
+                        # Get the 3D Coordinates
+                        face_3d.append([x, y, lm.z])  # Append to face_3d
+
+            # Convert it to the NumPy array
+            face_2d = np.array(face_2d, dtype=np.float64)
+
+            # Convert it to the NumPy array
+            face_3d = np.array(face_3d, dtype=np.float64)
+
+            # The camera matrix
+            focal_length = 1 * img_w
+
+            cam_matrix = np.array([[focal_length, 0, img_h / 2],
+                                   [0, focal_length, img_w / 2],
+                                   [0, 0, 1]])
+
+            # The distortion parameters
+            dist_matrix = np.zeros((4, 1), dtype=np.float64)
+
+            # Solve PnP
+            success, rot_vec, trans_vec = cv2.solvePnP(face_3d, face_2d, cam_matrix, dist_matrix)
+
+            # Get rotational matrix
+            rmat, jac = cv2.Rodrigues(rot_vec)
+
+            # Get angles
+            angles, mtxR, mtxQ, Qx, Qy, Qz = cv2.RQDecomp3x3(rmat)
+
+            # Get the y rotation degree
+            x = angles[0] * 360
+            y = angles[1] * 360
+            z = angles[2] * 360
+
+            # See where the user's head tilting
+            if y < -angle:
+                text = "Looking Left"
+            elif y > angle:
+                text = "Looking Right"
+            elif x < -angle:
+                text = "Looking Down"
+            elif x > angle:
+                text = "Looking Up"
+            else:
+                text = "Forward"
+
+            # Check if the face is straight (pose condition)
+            if text == "Forward":
+                ltrb = track.to_ltrb()
+
+                # Check face size
+                face_area = (ltrb[2] - ltrb[0]) * (ltrb[3] - ltrb[1])
+                if face_area < min_face_size:
+                    continue  # Skip small faces
+
+                # Get the face bounding box coordinates
+                top, right, bottom, left = int(ltrb[1]), int(ltrb[2]), int(ltrb[3]), int(ltrb[0])
+
+                # Get face image
+                face_image = frame[top:bottom, left:right]
+
+                # Save the face image
+                image_path = f"footfall(V2)/{track_id}_frame{frame_id}.png"
+                cv2.imwrite(image_path, face_image)
+
+                # Get face embedding
+                face_encoding = face_recognition.face_encodings(frame, [(top, right, bottom, left)])[0]
+
+                # Check if the face embedding is not empty before saving
+                if len(face_encoding) > 0:
+                    # Compare with existing embeddings
+                    match = False
+                    for saved_id, saved_info in saved_data.items():
+                        saved_embedding = saved_info["embedding"]
+                        # Compare the face embeddings using face_recognition library
+                        results = face_recognition.compare_faces([saved_embedding], face_encoding)
+
+                        # Check if there is a match
+                        if any(results):
+                            match = True
+                            break
+
+                    # If no match, save the face embedding
+                    if not match:
+                        # Save the face embedding
+                        saved_data[track_id] = {
+                            "embedding": face_encoding,
+                            "image_path": image_path
+                        }
+
+                        # Draw label
+                        label = f"ID: {track_id}"
+                        cv2.putText(frame, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    # Draw count on the frame
+    cv2.putText(frame, f"Unique Faces: {len(saved_data)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # Display the frame
+    cv2.imshow("Video Processing", frame)
+
+    # Break the loop if 'q' is pressed or end of video is reached
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
